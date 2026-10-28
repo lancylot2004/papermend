@@ -80,6 +80,11 @@ enum Command {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // reqwest is built with `rustls-no-provider` (see Cargo.toml), so the binary picks the TLS
+    // crypto provider: ring, which cross-compiles cleanly to every release target.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("no other TLS provider is installed before this");
     let cli = Cli::parse();
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,

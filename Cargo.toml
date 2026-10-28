@@ -20,7 +20,17 @@ tokio = { version = "1.54.1", features = ["macros", "rt", "process"] }
 
 # HTTP: Async client. Default TLS is rustls with the platform verifier, so the OS trust store
 #       (including MDM-installed CAs) is honoured.
-reqwest = { version = "0.13.5", features = ["json"] }
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "json",
+    "charset",
+    "http2",
+    "system-proxy",
+    "rustls-no-provider",
+] }
+
+# HTTP: TLS with the ring provider: unlike the default aws-lc-rs, it cross-compiles with a plain
+# C compiler, which keeps every release target buildable with cross.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 
 # Serialisation: Print Deploy wire format.
 serde = { version = "1.0.229", features = ["derive"] }
