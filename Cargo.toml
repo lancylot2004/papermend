@@ -7,6 +7,14 @@ description = "Minimal, CLI-only PaperCut Print Deploy client for macOS and Linu
 readme = "README.md"
 license = "MIT"
 keywords = ["papercut", "printing", "cups"]
+categories = ["command-line-utilities"]
+repository = "https://github.com/lancylot2004/papermend"
+
+# cargo-binstall: where the CI release job puts the prebuilt binaries, and how they unpack.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 [dependencies]
 # CLI: Derivation-based CLI generator.
