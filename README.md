@@ -17,6 +17,7 @@ Rosetta on Apple Silicon - a common, opaque failure case.
 | Prebuilt | `cargo binstall papermend`                                     |
 | Source   | `cargo install papermend`                                      |
 | Manual   | [Releases](https://github.com/lancylot2004/papermend/releases) |
+| deb, rpm | [Releases](https://github.com/lancylot2004/papermend/releases), then `dpkg -i` / `rpm -i` |
 
 Installing never needs root. Running `sync` needs an admin account (macOS) or membership of the
 `lpadmin` group (Linux), because CUPS gates queue changes on it.

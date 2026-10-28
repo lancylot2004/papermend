@@ -33,8 +33,8 @@ jobs:
         include:
           - { target: aarch64-apple-darwin, os: macos-latest }
           - { target: x86_64-apple-darwin, os: macos-latest }
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, cross: true }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross: true }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, cross: true, packages: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross: true, packages: true }
           - { target: armv7-unknown-linux-gnueabihf, os: ubuntu-latest, cross: true }
           - { target: i686-unknown-linux-gnu, os: ubuntu-latest, cross: true }
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
@@ -54,10 +54,20 @@ jobs:
       - run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }}
       - name: Package
         run: tar -C target/${{ matrix.target }}/release -czf papermend-${{ matrix.target }}.tar.gz papermend
+      # Debian and RPM packages for the two mainstream Linux architectures, from the same binary.
+      - name: Package deb and rpm
+        if: ${{ matrix.packages }}
+        run: |
+          cargo install cargo-deb cargo-generate-rpm
+          cargo deb --no-build --no-strip --target ${{ matrix.target }} -o .
+          cargo generate-rpm --target ${{ matrix.target }} -o .
       - uses: actions/upload-artifact@v4
         with:
           name: papermend-${{ matrix.target }}
-          path: papermend-*.tar.gz
+          path: |
+            papermend-*.tar.gz
+            *.deb
+            *.rpm
 
   release:
     name: Release
@@ -70,11 +80,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - run: shasum -a 256 papermend-*.tar.gz > SHA256SUMS
+      - run: shasum -a 256 papermend*.tar.gz papermend*.deb papermend*.rpm > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            papermend-*.tar.gz
+            papermend*.tar.gz
+            papermend*.deb
+            papermend*.rpm
             SHA256SUMS
 
   # Opens a version-bump PR on the tap with the official `brew bump-formula-pr`; the tap's own

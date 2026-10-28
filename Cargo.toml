@@ -16,6 +16,11 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
 pkg-fmt = "tgz"
 bin-dir = "{ bin }{ binary-ext }"
 
+# cargo-generate-rpm: what goes into the .rpm. With --target, `target/release` is rewritten to
+# the target's own release directory. cargo-deb needs no configuration.
+[package.metadata.generate-rpm]
+assets = [{ source = "target/release/papermend", dest = "/usr/bin/papermend", mode = "755" }]
+
 [dependencies]
 # CLI: Derivation-based CLI generator.
 clap = { version = "4.6.7", features = ["derive", "env"] }
