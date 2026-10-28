@@ -13,6 +13,7 @@ Rosetta on Apple Silicon - a common, opaque failure case.
 
 | Install  | Command                                                        |
 |----------|----------------------------------------------------------------|
+| Homebrew | `brew install lancylot2004/tap/papermend`                      |
 | Prebuilt | `cargo binstall papermend`                                     |
 | Source   | `cargo install papermend`                                      |
 | Manual   | [Releases](https://github.com/lancylot2004/papermend/releases) |

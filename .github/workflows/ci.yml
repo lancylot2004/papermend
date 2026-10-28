@@ -76,3 +76,24 @@ jobs:
           files: |
             papermend-*.tar.gz
             SHA256SUMS
+
+  # Opens a version-bump PR on the tap with the official `brew bump-formula-pr`; the tap's own
+  # workflows (from `brew tap-new`) then build and publish bottles when the PR is merged.
+  # Needs the TAP_TOKEN secret: a classic PAT with repo scope on lancylot2004/homebrew-tap.
+  homebrew:
+    name: Homebrew
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    env:
+      HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - name: Bump formula
+        run: |
+          URL="https://github.com/lancylot2004/papermend/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          SHA=$(curl -fsSL "$URL" | shasum -a 256 | cut -d' ' -f1)
+          brew tap lancylot2004/tap
+          brew bump-formula-pr lancylot2004/tap/papermend \
+            --url "$URL" --sha256 "$SHA" \
+            --message "Automated bump from the papermend release workflow." \
+            --no-browse --no-fork
