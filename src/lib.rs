@@ -12,5 +12,6 @@
 #[cfg(not(unix))]
 compile_error!("papermend drives CUPS, so it currently supports macOS and Linux only.");
 
+pub mod api;
 pub mod error;
 pub mod style;
