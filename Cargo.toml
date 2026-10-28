@@ -1,0 +1,47 @@
+[package]
+name = "papermend"
+version = "0.1.0"
+authors = ["Lancelot Liu <me@lancy.dev>"]
+edition = "2024"
+description = "Minimal, CLI-only PaperCut Print Deploy client for macOS and Linux. Nothing runs in the background."
+readme = "README.md"
+license = "MIT"
+keywords = ["papercut", "printing", "cups"]
+
+[dependencies]
+# CLI: Derivation-based CLI generator.
+clap = { version = "4.6.7", features = ["derive", "env"] }
+
+# CLI: Coloured output that respects NO_COLOR and non-terminals. Already pulled in by clap.
+anstream = "1.0.0"
+
+# Async: Runtime for HTTP and subprocesses.
+tokio = { version = "1.54.1", features = ["macros", "rt", "process"] }
+
+# HTTP: Async client. Default TLS is rustls with the platform verifier, so the OS trust store
+#       (including MDM-installed CAs) is honoured.
+reqwest = { version = "0.13.5", features = ["json"] }
+
+# Serialisation: Print Deploy wire format.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+# Utility: URL building and parsing.
+url = "2.5.8"
+
+# Utility: Local interface addresses, which the server uses to pick queues.
+if-addrs = "0.15.0"
+
+# Utility: Hidden password prompt.
+rpassword = "7.5.4"
+
+# Language: Helpers for customising derives.
+derive_more = { version = "2.1.1", features = ["display", "from", "error"] }
+
+[dev-dependencies]
+# Testing: Parametrised tests.
+rstest = "0.28.0"
+
+[[bin]]
+name = "papermend"
+path = "src/main.rs"
