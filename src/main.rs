@@ -4,6 +4,7 @@ use papermend::api::model::{ClientInfo, LoggedInUser, Machine, Os, PrinterDef};
 use papermend::api::{self, Client};
 use papermend::cups;
 use papermend::error::{Error, Result};
+use papermend::proxy::{self, Tunnel};
 use papermend::reconcile;
 use papermend::style::{self, BAD, CLAP_STYLE, GOOD, KEY, WARN};
 use std::collections::HashMap;
@@ -36,6 +37,15 @@ struct Cli {
     /// Per-request HTTP timeout in seconds.
     #[arg(long, env = "PAPERMEND_TIMEOUT", global = true, default_value_t = 30)]
     timeout: u64,
+
+    /// SSH proxies to fall back to when the server is not directly reachable: `~/.ssh/config`
+    /// aliases or `user@host`, tried in random order. Passwordless (key) SSH is required.
+    #[arg(long, env = "PAPERMEND_PROXY", global = true, value_delimiter = ',', value_name = "SSH")]
+    proxy: Vec<String>,
+
+    /// Seconds to probe the direct connection before falling back to the proxies.
+    #[arg(long, env = "PAPERMEND_PROBE_TIMEOUT", global = true, default_value_t = 2)]
+    probe_timeout: u64,
 
     /// Print every server response, with tokens redacted, to stderr.
     #[arg(short, long, global = true)]
@@ -97,30 +107,90 @@ async fn main() -> ExitCode {
 
 /// Dispatches a parsed command.
 async fn run(cli: Cli) -> Result<()> {
-    let timeout = Duration::from_secs(cli.timeout);
+    let net = Net {
+        server: cli.server,
+        timeout: Duration::from_secs(cli.timeout),
+        probe: Duration::from_secs(cli.probe_timeout),
+        proxies: cli.proxy,
+        verbose: cli.verbose,
+    };
     match cli.command {
-        Command::Status => status(&cli.server, timeout, cli.verbose).await,
+        Command::Status => status(&net).await,
         Command::Sync { dry_run, printers, mobility } => {
             let username = username(cli.username)?;
-            sync(&cli.server, timeout, &username, &printers, &mobility, dry_run, cli.verbose).await
+            sync(&net, &username, &printers, &mobility, dry_run).await
         }
         Command::Remove { dry_run } => remove(dry_run).await,
     }
 }
 
-/// Prints server reachability and managed queues.
-async fn status(server: &Url, timeout: Duration, verbose: bool) -> Result<()> {
-    println!("{}", style::line(KEY, "server", server));
-    let client = Client::new(server.clone(), timeout, verbose)?;
-    match client.ping().await {
-        Ok(()) => println!("{}", style::line(KEY, "reachable", format!("{GOOD}yes{GOOD:#}"))),
-        Err(e) => {
-            println!(
-                "{}",
-                style::line(KEY, "reachable", format!("{BAD}no{BAD:#} ({})", e.report()))
-            )
+/// How to reach the Print Deploy server, resolved once from the global flags.
+struct Net {
+    server: Url,
+    timeout: Duration,
+    /// Direct-connection probe timeout before proxy fallback.
+    probe: Duration,
+    /// SSH destinations to tunnel through, in the user's order.
+    proxies: Vec<String>,
+    verbose: bool,
+}
+
+impl Net {
+    /// A client for the Print Deploy server, optionally through a local SOCKS port.
+    fn client(&self, socks: Option<u16>) -> Result<Client> {
+        Client::new(self.server.clone(), self.timeout, self.verbose, socks)
+    }
+
+    /// A short-timeout client for reachability probes, which never prints.
+    fn prober(&self, socks: Option<u16>) -> Result<Client> {
+        Client::new(self.server.clone(), self.probe, false, socks)
+    }
+}
+
+/// Opens a SOCKS tunnel through the first proxy that comes up and can reach the server.
+async fn through_proxies(net: &Net) -> Result<Tunnel> {
+    for destination in proxy::shuffled(&net.proxies) {
+        match Tunnel::open(destination).await {
+            Ok(tunnel) => match net.prober(Some(tunnel.port))?.ping().await {
+                Ok(()) => return Ok(tunnel),
+                Err(e) => println!(
+                    "{}",
+                    style::line(
+                        WARN,
+                        "warn",
+                        format!("server unreachable via {destination} ({})", e.report())
+                    )
+                ),
+            },
+            Err(e) => println!("{}", style::line(WARN, "warn", e.report())),
         }
     }
+    Err(Error::Invalid("The server is unreachable directly and through every proxy.".into()))
+}
+
+/// Probes the direct route; when it fails and proxies are configured, falls back to a tunnel.
+/// `None` means connect directly.
+async fn connect(net: &Net) -> Result<Option<Tunnel>> {
+    if net.prober(None)?.ping().await.is_ok() || net.proxies.is_empty() {
+        return Ok(None);
+    }
+    through_proxies(net).await.map(Some)
+}
+
+/// Prints server reachability, directly and through the proxies, and managed queues.
+async fn status(net: &Net) -> Result<()> {
+    println!("{}", style::line(KEY, "server", &net.server));
+    let mut reachable = match net.prober(None)?.ping().await {
+        Ok(()) => format!("direct {GOOD}yes{GOOD:#}"),
+        Err(e) => format!("direct {BAD}no{BAD:#} ({})", e.report()),
+    };
+    if !net.proxies.is_empty() {
+        reachable += &match through_proxies(net).await {
+            Ok(tunnel) => format!(" · via {} {GOOD}yes{GOOD:#}", tunnel.via),
+            Err(e) => format!(" · via proxy {BAD}no{BAD:#} ({})", e.report()),
+        };
+    }
+    println!("{}", style::line(KEY, "reachable", reachable));
 
     let managed = cups::managed().await?;
     println!("{}", style::line(KEY, "queues", managed.len()));
@@ -147,19 +217,23 @@ async fn client_info(username: &str) -> Result<ClientInfo> {
 /// Logs in, fetches the server's queues and each Mobility Print queue's per-user address, and makes
 /// CUPS match. Nothing is stored: once a queue exists, CUPS holds its address.
 async fn sync(
-    server: &Url,
-    timeout: Duration,
+    net: &Net,
     username: &str,
     printers: &[String],
     mobility: &Url,
     dry_run: bool,
-    verbose: bool,
 ) -> Result<()> {
     let password = rpassword::prompt_password(format!("Password for {username}: "))?;
+    // The tunnel, if any, lives for the whole sync; dropping it at the end kills the ssh child.
+    let tunnel = connect(net).await?;
+    let socks = tunnel.as_ref().map(|tunnel| tunnel.port);
+    if let Some(tunnel) = &tunnel {
+        println!("{}", style::line(KEY, "proxy", &tunnel.via));
+    }
     // `--printer` queues skip Print Deploy entirely: the Mobility Print lookup authenticates on
     // its own, so no login or printer list is needed.
     let desired = if printers.is_empty() {
-        let mut client = Client::new(server.clone(), timeout, verbose)?;
+        let mut client = net.client(socks)?;
         client.login(username, &password).await?;
         client.printers(&client_info(username).await?).await?
     } else {
@@ -182,7 +256,7 @@ async fn sync(
     let mut addresses = HashMap::new();
     for printer in &desired {
         let Some(mobility) = reconcile::mobility_server(printer) else { continue };
-        let mobility = Client::new(mobility, timeout, verbose)?;
+        let mobility = Client::new(mobility, net.timeout, net.verbose, socks)?;
         match mobility.mobility_printer_url(&printer.name, username, &password).await {
             Ok(address) => {
                 addresses.insert(printer.name.clone(), address);

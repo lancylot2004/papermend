@@ -11,12 +11,12 @@ Rosetta on Apple Silicon - a common, opaque failure case.
 
 ## Usage
 
-| Install  | Command                                                        |
-|----------|----------------------------------------------------------------|
-| Homebrew | `brew install lancylot2004/tap/papermend`                      |
-| Prebuilt | `cargo binstall papermend`                                     |
-| Source   | `cargo install papermend`                                      |
-| Manual   | [Releases](https://github.com/lancylot2004/papermend/releases) |
+| Install  | Command                                                                                   |
+|----------|-------------------------------------------------------------------------------------------|
+| Homebrew | `brew install lancylot2004/tap/papermend`                                                 |
+| Prebuilt | `cargo binstall papermend`                                                                |
+| Source   | `cargo install papermend`                                                                 |
+| Manual   | [Releases](https://github.com/lancylot2004/papermend/releases)                            |
 | deb, rpm | [Releases](https://github.com/lancylot2004/papermend/releases), then `dpkg -i` / `rpm -i` |
 
 Installing never needs root. Running `sync` needs an admin account (macOS) or membership of the
@@ -37,11 +37,13 @@ papermend remove            # Remove every queue papermend installed.
 - **Linux:** Builds, but not tested.
 - **Windows:** Not supported (yet). Windows does not use CUPS.
 
-| Option       | Env                  | Default                                   |
-|--------------|----------------------|-------------------------------------------|
-| `--server`   | `PAPERMEND_SERVER`   | `https://icl-print-service.ic.ac.uk:9174` |
-| `--username` | `PAPERMEND_USERNAME` | None; required.                           |
-| `--timeout`  | `PAPERMEND_TIMEOUT`  | `30` seconds per request                  |
+| Option            | Env                       | Default                                   |
+|-------------------|---------------------------|-------------------------------------------|
+| `--server`        | `PAPERMEND_SERVER`        | `https://icl-print-service.ic.ac.uk:9174` |
+| `--username`      | `PAPERMEND_USERNAME`      | None; required.                           |
+| `--timeout`       | `PAPERMEND_TIMEOUT`       | `30` seconds per request                  |
+| `--proxy`         | `PAPERMEND_PROXY`         | None; e.g. `shell1,shell5.doc.ic.ac.uk`   |
+| `--probe-timeout` | `PAPERMEND_PROBE_TIMEOUT` | `2` seconds before proxy fallback         |
 
 ## Behaviour
 
@@ -101,6 +103,10 @@ print job takes.
 
 - Managed queues are named `papermend_<server name>`; all else is ignored. This means that `papermend` holds no state of
   its own.
+- With `--proxy`, the direct route is probed first (`--probe-timeout`); when it fails, papermend tunnels its own
+  traffic through `ssh -D` to one of the given hosts, picked at random — `~/.ssh/config` aliases or `user@host`, with
+  `BatchMode=yes`, so SSH keys are required and no password ever passes through papermend. Print jobs go straight from
+  CUPS and are never proxied.
 - Each Mobility Print queue's device URI is a per-user address (`ipps://…/printers/<name>/users/<user>/<token>`), looked
   up with the user's password during `sync`. This means that you **should not install `papermend` on shared accounts**,
   since anyone with these links can print as you.

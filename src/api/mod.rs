@@ -25,14 +25,17 @@ pub struct Client {
 
 impl Client {
     /// Creates a client for `base`, e.g. `https://host:9174`, with a per-request `timeout`. With
-    /// `verbose`, every response is printed to stderr with secrets redacted. TLS certificates are
-    /// always verified.
-    pub fn new(base: Url, timeout: Duration, verbose: bool) -> Result<Self> {
-        let http = reqwest::Client::builder()
+    /// `verbose`, every response is printed to stderr with secrets redacted. With `socks`, every
+    /// request goes through the local SOCKS5 proxy on that port, name resolution included. TLS
+    /// certificates are always verified.
+    pub fn new(base: Url, timeout: Duration, verbose: bool, socks: Option<u16>) -> Result<Self> {
+        let mut builder = reqwest::Client::builder()
             .user_agent(concat!("papermend/", env!("CARGO_PKG_VERSION")))
-            .timeout(timeout)
-            .build()?;
-        Ok(Self { http, base, token: None, verbose })
+            .timeout(timeout);
+        if let Some(port) = socks {
+            builder = builder.proxy(reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))?);
+        }
+        Ok(Self { http: builder.build()?, base, token: None, verbose })
     }
 
     /// Checks the server is reachable.

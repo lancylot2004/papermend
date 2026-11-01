@@ -15,5 +15,6 @@ compile_error!("papermend drives CUPS, so it currently supports macOS and Linux 
 pub mod api;
 pub mod cups;
 pub mod error;
+pub mod proxy;
 pub mod reconcile;
 pub mod style;
