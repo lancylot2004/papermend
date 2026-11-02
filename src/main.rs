@@ -4,6 +4,7 @@ use papermend::api::model::{ClientInfo, LoggedInUser, Machine, Os, PrinterDef};
 use papermend::api::{self, Client};
 use papermend::cups;
 use papermend::error::{Error, Result};
+use papermend::forward;
 use papermend::proxy::{self, Tunnel};
 use papermend::reconcile;
 use papermend::style::{self, BAD, CLAP_STYLE, GOOD, KEY, WARN};
@@ -78,6 +79,12 @@ enum Command {
             default_value = "https://icl-print-mobile.ic.ac.uk:9164"
         )]
         mobility: Url,
+
+        /// Keep jobs printing away from the server's network: queues point at a launchd agent
+        /// that starts per job and forwards it, through an SSH proxy when the direct dial
+        /// fails. macOS only.
+        #[arg(long, requires = "proxy")]
+        forward: bool,
     },
 
     /// Remove every queue papermend installed.
@@ -85,6 +92,15 @@ enum Command {
         /// Print what would be removed without changing anything.
         #[arg(short = 'n', long)]
         dry_run: bool,
+    },
+
+    /// Serve one connection launchd accepted and handed over as fd 0. Internal: installed as a
+    /// LaunchAgent by `sync --forward`.
+    #[command(hide = true)]
+    Forward {
+        /// Mobility Print `host:port` to forward to.
+        #[arg(long)]
+        target: String,
     },
 }
 
@@ -116,11 +132,12 @@ async fn run(cli: Cli) -> Result<()> {
     };
     match cli.command {
         Command::Status => status(&net).await,
-        Command::Sync { dry_run, printers, mobility } => {
+        Command::Sync { dry_run, printers, mobility, forward } => {
             let username = username(cli.username)?;
-            sync(&net, &username, &printers, &mobility, dry_run).await
+            sync(&net, &username, &printers, &mobility, forward, dry_run).await
         }
         Command::Remove { dry_run } => remove(dry_run).await,
+        Command::Forward { target } => serve_forward(&net, &target).await,
     }
 }
 
@@ -192,6 +209,14 @@ async fn status(net: &Net) -> Result<()> {
     }
     println!("{}", style::line(KEY, "reachable", reachable));
 
+    let forwarding = match forward::installed()? {
+        Some(agent) => {
+            format!("127.0.0.1:{} to {} via {}", forward::PORT, agent.target, agent.proxies)
+        }
+        None => "off".into(),
+    };
+    println!("{}", style::line(KEY, "forward", forwarding));
+
     let managed = cups::managed().await?;
     println!("{}", style::line(KEY, "queues", managed.len()));
     for queue in managed {
@@ -221,6 +246,7 @@ async fn sync(
     username: &str,
     printers: &[String],
     mobility: &Url,
+    forward: bool,
     dry_run: bool,
 ) -> Result<()> {
     let password = rpassword::prompt_password(format!("Password for {username}: "))?;
@@ -271,6 +297,8 @@ async fn sync(
             ),
         }
     }
+    // With --forward, queues point at the agent's local port; the agent dials the real server.
+    let agent = forward.then(|| forward::localise(&mut addresses)).transpose()?;
     let plan = reconcile::plan(&desired, &installed, &addresses);
 
     print!("{plan}");
@@ -284,10 +312,24 @@ async fn sync(
     for name in &plan.remove {
         cups::remove(name).await?;
     }
+    match agent {
+        Some(target) => {
+            forward::install(&target, &net.proxies, net.probe).await?;
+            println!(
+                "{}",
+                style::line(KEY, "forward", format!("127.0.0.1:{} to {target}", forward::PORT))
+            );
+        }
+        None => {
+            if forward::uninstall().await? {
+                println!("{}", style::line(BAD, "del", "forward agent"));
+            }
+        }
+    }
     Ok(())
 }
 
-/// Removes every managed queue.
+/// Removes every managed queue and the forward agent.
 async fn remove(dry_run: bool) -> Result<()> {
     for queue in cups::managed().await? {
         println!(
@@ -298,7 +340,47 @@ async fn remove(dry_run: bool) -> Result<()> {
             cups::remove(&queue.name).await?;
         }
     }
+    if forward::installed()?.is_some() {
+        println!("{}", style::line(BAD, "del", "forward agent"));
+        if !dry_run {
+            forward::uninstall().await?;
+        }
+    }
     Ok(())
+}
+
+/// Serves one connection launchd accepted and handed over as fd 0: dials `target` directly, or
+/// through a proxy tunnel when the direct dial misses the probe timeout. Prints nothing to
+/// stdout — under inetd compatibility that is the connection itself.
+async fn serve_forward(net: &Net, target: &str) -> Result<()> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: launchd's inetd compatibility mode hands the accepted connection over as fd 0,
+    // and nothing else on this path reads stdin.
+    let client = unsafe { std::net::TcpStream::from_raw_fd(0) };
+    client.set_nonblocking(true)?;
+    let mut client = tokio::net::TcpStream::from_std(client)?;
+    let direct = tokio::time::timeout(net.probe, tokio::net::TcpStream::connect(target)).await;
+    let (mut upstream, _tunnel) = match direct {
+        Ok(Ok(stream)) => (stream, None),
+        _ => {
+            let tunnel = raw_tunnel(net, target).await?;
+            (tokio::net::TcpStream::connect(("127.0.0.1", tunnel.port)).await?, Some(tunnel))
+        }
+    };
+    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+    Ok(())
+}
+
+/// Opens a raw forwarding tunnel to `target` through the first proxy that comes up, logging
+/// failed attempts to stderr only.
+async fn raw_tunnel(net: &Net, target: &str) -> Result<Tunnel> {
+    for destination in proxy::shuffled(&net.proxies) {
+        match Tunnel::to(destination, target).await {
+            Ok(tunnel) => return Ok(tunnel),
+            Err(e) => eprintln!("{}", e.report()),
+        }
+    }
+    Err(Error::Invalid(format!("{target} is unreachable directly and through every proxy.")))
 }
 
 /// Version reported to the server: the official client release whose wire format papermend

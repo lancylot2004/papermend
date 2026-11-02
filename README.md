@@ -28,7 +28,9 @@ papermend sync              # Sign in and install printers.
 papermend sync --printer Canon-Colour --printer Canon-Mono
                             # Name printers yourself to bypass frequent PaperCut failures:
                             # these are the two virtual printers at Imperial College.
-papermend remove            # Remove every queue papermend installed.
+papermend sync --proxy shell1,shell5 --forward
+                            # Keep printing off-network: jobs forward through SSH on demand (macOS).
+papermend remove            # Remove every queue papermend installed, and the forward agent.
 ```
 
 ## Platforms
@@ -102,11 +104,15 @@ Dashed arrows recur in the background; solid run once per invocation; thick is t
 print job takes.
 
 - Managed queues are named `papermend_<server name>`; all else is ignored. This means that `papermend` holds no state of
-  its own.
+  its own, except the optional `--forward` agent below.
 - With `--proxy`, the direct route is probed first (`--probe-timeout`); when it fails, papermend tunnels its own
   traffic through `ssh -D` to one of the given hosts, picked at random — `~/.ssh/config` aliases or `user@host`, with
   `BatchMode=yes`, so SSH keys are required and no password ever passes through papermend. Print jobs go straight from
-  CUPS and are never proxied.
+  CUPS and are never proxied, unless you opt into `--forward`.
+- `sync --forward` (macOS) points queues at `127.0.0.1:9164`, a socket launchd holds with no process behind it: each
+  print job starts one `papermend forward`, which dials the server directly or through an SSH proxy, then exits with
+  the connection. The LaunchAgent plist is the one piece of state papermend keeps; `remove`, or `sync` without
+  `--forward`, deletes it.
 - Each Mobility Print queue's device URI is a per-user address (`ipps://…/printers/<name>/users/<user>/<token>`), looked
   up with the user's password during `sync`. This means that you **should not install `papermend` on shared accounts**,
   since anyone with these links can print as you.

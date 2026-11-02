@@ -29,9 +29,23 @@ impl Tunnel {
     /// Starts a SOCKS tunnel through `destination`: a `~/.ssh/config` alias or `user@host`, as
     /// `ssh` itself accepts. Returns once the local port accepts connections.
     pub async fn open(destination: &str) -> Result<Self> {
+        Self::start(destination, None).await
+    }
+
+    /// Starts a tunnel that carries raw TCP from the local port straight to `target`
+    /// (`host:port`) instead of speaking SOCKS.
+    pub async fn to(destination: &str, target: &str) -> Result<Self> {
+        Self::start(destination, Some(target)).await
+    }
+
+    async fn start(destination: &str, target: Option<&str>) -> Result<Self> {
         let port = free_port().await?;
+        let forward = match target {
+            Some(target) => format!("-L127.0.0.1:{port}:{target}"),
+            None => format!("-D127.0.0.1:{port}"),
+        };
         let mut child = Command::new("ssh")
-            .args(["-D", &format!("127.0.0.1:{port}"), "-N"])
+            .args([&forward, "-N"])
             .args(["-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes"])
             .arg(destination)
             .stdin(Stdio::null())
